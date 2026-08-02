@@ -73,7 +73,8 @@ async function registerUserController(req, res) {
         res.cookie("token", token, COOKIE_OPTIONS);
 
         return res.status(201).json({
-            message: "User created successfully",
+            message: 'User created successfully',
+            token,
             user: formatUser(user)
         });
     } catch (error) {
@@ -113,7 +114,8 @@ async function loginUserController(req, res) {
         res.cookie("token", token, COOKIE_OPTIONS);
 
         return res.status(200).json({
-            message: "Login successful",
+            message: 'Login successful',
+            token,
             user: formatUser(user)
         });
     } catch (error) {

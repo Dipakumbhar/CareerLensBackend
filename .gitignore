@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment variables — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# Test coverage
+coverage/
+
+# Build outputs
+dist/
+build/
+
+# Cache
+.cache/
+
+# OS files
+.DS_Store
+Thumbs.db

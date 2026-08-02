@@ -3,11 +3,13 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const tokenBlacklistModel = require("../models/blacklist.model");
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 const COOKIE_OPTIONS = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 24 * 60 * 60 * 1000 // 1 day in ms — matches JWT expiresIn: "1d"
+    secure: isProduction,           // HTTPS only in production
+    sameSite: isProduction ? 'none' : 'lax', // 'none' required for cross-domain (Vercel → Render)
+    maxAge: 24 * 60 * 60 * 1000    // 1 day in ms — matches JWT expiresIn: "1d"
 };
 
 /**
@@ -132,7 +134,11 @@ async function logoutUserController(req, res) {
     if (token) {
         await tokenBlacklistModel.create({ token: token });
     }
-    res.clearCookie("token", { httpOnly: true, sameSite: "lax" });
+    res.clearCookie('token', {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? 'none' : 'lax',
+    });
     res.status(200).json({
         message: "Logout successful"
     });

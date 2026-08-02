@@ -19,7 +19,7 @@ app.use(
                 styleSrc:    ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
                 fontSrc:     ["'self'", 'https://fonts.gstatic.com'],
                 imgSrc:      ["'self'", 'data:', 'blob:'],
-                connectSrc:  ["'self'"],
+                connectSrc:  ["'self'", 'https://careerlensbackend-1.onrender.com'],
                 objectSrc:   ["'none'"],
                 upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null,
             },
@@ -35,7 +35,7 @@ app.use(
 // In production CLIENT_URL must be set to the deployed frontend origin.
 // Never allow '*' — credentials (cookies) require an explicit origin.
 const allowedOrigins = process.env.CLIENT_URL
-    ? [process.env.CLIENT_URL]
+    ? [process.env.CLIENT_URL, 'https://careerbridge-project.vercel.app']
     : ['http://localhost:5173', 'http://localhost:5174', 'https://careerbridge-project.vercel.app'];
 
 app.use(cors({

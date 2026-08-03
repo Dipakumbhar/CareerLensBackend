@@ -132,18 +132,24 @@ async function loginUserController(req, res) {
  * @access Public
  */
 async function logoutUserController(req, res) {
-    const token = req.cookies.token;
+    // Get token from cookie first, then Authorization header (cross-domain)
+    let token = req.cookies?.token;
+    if (!token) {
+        const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            token = authHeader.slice(7);
+        }
+    }
+    // Blacklist it so it can never be reused
     if (token) {
-        await tokenBlacklistModel.create({ token: token });
+        try { await tokenBlacklistModel.create({ token }); } catch (_) { /* already blacklisted */ }
     }
     res.clearCookie('token', {
         httpOnly: true,
         secure: isProduction,
         sameSite: isProduction ? 'none' : 'lax',
     });
-    res.status(200).json({
-        message: "Logout successful"
-    });
+    res.status(200).json({ message: 'Logout successful' });
 }
 
 /**

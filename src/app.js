@@ -6,12 +6,29 @@ const rateLimit    = require('express-rate-limit');
 
 const app = express();
 
+// ─── Trust Render's proxy ─────────────────────────────────────────────────────
+// Render (and most cloud hosts) sit behind a load balancer.
+// Without this, express sees every IP as the same proxy IP — rate limiting
+// would block ALL users simultaneously after the limit is reached.
+app.set('trust proxy', 1);
+
+// ─── Request logger (production debugging) ────────────────────────────────────
+app.use((req, _res, next) => {
+    console.log(`[req] ${req.method} ${req.path} | origin: ${req.headers.origin || 'none'}`);
+    next();
+});
+
+// ─── Health check (before all middleware) ─────────────────────────────────────
+// Render pings this to decide if the service is alive.
+// Must respond fast — no auth, no DB queries.
+app.get('/health', (_req, res) => res.status(200).json({ status: 'ok' }));
+
 // ─── Security headers (Helmet) ────────────────────────────────────────────────
+const isProduction = process.env.NODE_ENV === 'production';
+
 app.use(
     helmet({
-        // Allow cross-origin resources for the Vite dev server / CDN fonts
         crossOriginResourcePolicy: { policy: 'cross-origin' },
-        // Content-Security-Policy — tight but compatible with the SPA proxy setup
         contentSecurityPolicy: {
             directives: {
                 defaultSrc:  ["'self'"],
@@ -19,69 +36,85 @@ app.use(
                 styleSrc:    ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
                 fontSrc:     ["'self'", 'https://fonts.gstatic.com'],
                 imgSrc:      ["'self'", 'data:', 'blob:'],
-                connectSrc:  ["'self'", 'https://careerlensbackend-1.onrender.com'],
+                connectSrc:  [
+                    "'self'",
+                    'https://careerlensbackend-1.onrender.com',
+                ],
                 objectSrc:   ["'none'"],
-                upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null,
+                // upgradeInsecureRequests only in production — passing null in dev breaks helmet
+                ...(isProduction ? { upgradeInsecureRequests: [] } : {}),
             },
         },
-        // Strict-Transport-Security — only meaningful over HTTPS
-        hsts: process.env.NODE_ENV === 'production'
+        hsts: isProduction
             ? { maxAge: 31536000, includeSubDomains: true, preload: true }
             : false,
     })
 );
 
-// ─── CORS ──────────────────────────────────────────────────────────────────────
-// In production CLIENT_URL must be set to the deployed frontend origin.
-// Never allow '*' — credentials (cookies) require an explicit origin.
-const allowedOrigins = process.env.CLIENT_URL
-    ? [process.env.CLIENT_URL, 'https://careerbridge-project.vercel.app']
-    : ['http://localhost:5173', 'http://localhost:5174', 'https://careerbridge-project.vercel.app'];
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+// All allowed frontend origins. Add any new Vercel preview URLs here.
+// CLIENT_URL env var on Render overrides nothing — it supplements the list.
+const ALLOWED_ORIGINS = new Set([
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'https://careerbridge-project.vercel.app',
+    'https://career-lens-frontend-3a4k.vercel.app',
+    // Add further Vercel preview URLs as needed
+]);
 
-app.use(cors({
+// If CLIENT_URL is set on Render, include it too
+if (process.env.CLIENT_URL) {
+    ALLOWED_ORIGINS.add(process.env.CLIENT_URL);
+}
+
+const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (e.g. same-origin, server-to-server, Postman in dev)
+        // No origin = same-origin request, Postman, server-to-server — allow
         if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
+        if (ALLOWED_ORIGINS.has(origin)) return callback(null, true);
+        console.warn(`[cors] Blocked origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
-}));
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    optionsSuccessStatus: 204,   // Some browsers (IE11) choke on 200 for OPTIONS
+};
+
+// Handle OPTIONS preflight BEFORE any other middleware.
+// This ensures preflight never hits auth middleware or rate limiters.
+app.options('*', cors(corsOptions));
+app.use(cors(corsOptions));
 
 // ─── Body / Cookie parsing ────────────────────────────────────────────────────
-app.use(express.json({ limit: '1mb' }));        // tight payload limit
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use(cookieParser());
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
-// Auth endpoints — strict limits to prevent brute-force / credential stuffing
+// With 'trust proxy' set above, these now correctly use the real client IP.
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,   // 15 minutes
-    max: 20,                     // 20 attempts per window per IP
-    standardHeaders: true,       // Return `RateLimit-*` headers
-    legacyHeaders: false,
-    message: {
-        message: 'Too many requests from this IP, please try again after 15 minutes.'
-    },
-    skipSuccessfulRequests: false,
-});
-
-// Report generation — heavier AI operation, more generous window
-const reportLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,   // 1 hour
-    max: 10,                     // 10 reports per hour per IP
+    windowMs: 15 * 60 * 1000,
+    max: 20,
     standardHeaders: true,
     legacyHeaders: false,
-    message: {
-        message: 'Report generation limit reached. Please try again in an hour.'
-    },
+    message: { message: 'Too many requests. Please try again in 15 minutes.' },
+    skip: (req) => !isProduction,   // Skip rate limiting in local development
+});
+
+const reportLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Report generation limit reached. Please try again in an hour.' },
+    skip: (req) => !isProduction,
 });
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const authRouter      = require('./routes/auth.routes');
 const interviewRouter = require('./routes/interview.routes');
 
-// Apply auth rate limiter to login and register only
 app.use('/api/auth/login',    authLimiter);
 app.use('/api/auth/register', authLimiter);
 app.use('/api/interview',     reportLimiter);
@@ -89,26 +122,26 @@ app.use('/api/interview',     reportLimiter);
 app.use('/api/auth',      authRouter);
 app.use('/api/interview', interviewRouter);
 
+// ─── 404 handler for unknown API routes ───────────────────────────────────────
+app.use('/api/*', (_req, res) => {
+    res.status(404).json({ message: 'API endpoint not found.' });
+});
+
 // ─── Global error handler ─────────────────────────────────────────────────────
-// NEVER exposes stack traces, file paths, or implementation details to clients.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-    // Log full detail server-side only
-    console.error('[app] Unhandled error:', err.message || err);
+    console.error(`[error] ${req.method} ${req.path} →`, err.message || err);
 
-    // CORS rejection — return 403 without implementation detail
     if (err.message === 'Not allowed by CORS') {
         return res.status(403).json({ message: 'Forbidden: origin not allowed.' });
     }
-    // Multer: file too large
     if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ message: 'File is too large. Maximum allowed size is 5 MB.' });
+        return res.status(400).json({ message: 'File too large. Maximum size is 5 MB.' });
     }
-    // Multer: wrong file type
     if (err.message && err.message.includes('Only PDF')) {
-        return res.status(400).json({ message: 'Only PDF files are accepted. Please upload a .pdf resume.' });
+        return res.status(400).json({ message: 'Only PDF files are accepted.' });
     }
-    // Generic fallback — no internal detail to client
+
     const status = err.status || err.statusCode || 500;
     const safeMessage = status < 500
         ? (err.message || 'Bad request.')

@@ -83,7 +83,8 @@ const corsOptions = {
 
 // Handle OPTIONS preflight BEFORE any other middleware.
 // This ensures preflight never hits auth middleware or rate limiters.
-app.options('*', cors(corsOptions));
+// Note: Express 5 requires named wildcard parameter syntax '{*splat}' instead of bare '*'
+app.options('{*splat}', cors(corsOptions));
 app.use(cors(corsOptions));
 
 // ─── Body / Cookie parsing ────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ app.use('/api/auth',      authRouter);
 app.use('/api/interview', interviewRouter);
 
 // ─── 404 handler for unknown API routes ───────────────────────────────────────
-app.use('/api/*', (_req, res) => {
+app.use('/api/{*splat}', (_req, res) => {
     res.status(404).json({ message: 'API endpoint not found.' });
 });
 
